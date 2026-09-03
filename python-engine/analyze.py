@@ -51,9 +51,8 @@ def analyze_ortho(args):
     if os.path.exists(args.model_path):
         model = YOLO(args.model_path)
     else:
-        # Fallback to pretrained for pure execution test if custom not found yet
-        print(f"WARNING: Model {args.model_path} not found. Falling back to yolov8n-seg.pt")
-        model = YOLO("yolov8n-seg.pt")
+        # STRICT REQUIREMENT: Throw error if custom model missing.
+        raise FileNotFoundError(f"CRITICAL: Production model {args.model_path} not found. Please provide a custom-trained solar model. Fallbacks disabled for production.")
         
     print(f"Opening TIFF image {args.image_path}")
     all_detections = []
@@ -98,13 +97,14 @@ def analyze_ortho(args):
                 results = model(tile_bgr, conf=args.conf_thresh, verbose=False)
                 
                 for r in results:
-                    if r.masks is not None:
+                    if r.masks is not None and len(r.masks) > 0:
                         boxes = r.boxes.xyxy.cpu().numpy()
                         confs = r.boxes.conf.cpu().numpy()
                         cls = r.boxes.cls.cpu().numpy()
                         
-                        # Process each mask (as polygon coordinates)
-                        # We use boxes for the baseline
+                        # YOLO returns masks in format r.masks.xy (List of unnormalized polygonal arrays)
+                        masks_xy = r.masks.xy 
+
                         for i, box in enumerate(boxes):
                             x1, y1, x2, y2 = box
                             local_w = x2 - x1
@@ -116,16 +116,32 @@ def analyze_ortho(args):
                             global_w = int(local_w)
                             global_h = int(local_h)
                             
+                            # Shift polygon to global bounds
+                            local_polygon = masks_xy[i]
+                            
+                            # Sometimes mask polygon can be empty if edge cases trigger
+                            if len(local_polygon) == 0:
+                                continue
+                                
+                            global_polygon = local_polygon.copy()
+                            global_polygon[:, 0] += x
+                            global_polygon[:, 1] += y
+                            
+                            # Compute true area using cv2.contourArea
+                            true_area = cv2.contourArea(global_polygon)
+                            
                             det = {
                                 "bbox": (global_x, global_y, global_w, global_h),
+                                "polygon": global_polygon, # Store mask poly for drawing
                                 "conf": float(confs[i]),
                                 "cx": global_x + global_w / 2,
                                 "cy": global_y + global_h / 2,
-                                "area": global_w * global_h, # BBox area
+                                "area": true_area, # Exact segmentation mask area
                             }
                             all_detections.append(det)
 
         print(f"Total raw detections: {len(all_detections)}. Applying NMS...")
+        # Since standard IOU algorithm relies on BBox, bounding-box NMS preserves segmentation separation sufficiently for localized arrays.
         final_detections = global_nms(all_detections, args.iou_thresh)
         print(f"Valid panels after NMS: {len(final_detections)}")
         
@@ -136,7 +152,18 @@ def analyze_ortho(args):
         scale_factor = min(1.0, scale_factor)
         overview_w = int(width * scale_factor)
         overview_h = int(height * scale_factor)
+        
+        # Read the entire original TIFF but downsample it for the graphic
+        print("Reading Downsampled Base layer for annotations.")
         overview_img = np.zeros((overview_h, overview_w, 3), dtype=np.uint8)
+        try:
+             ds_data = src.read([1,2,3][:src.count], out_shape=(src.count, overview_h, overview_w))
+             if ds_data.shape[0] == 3:
+                 overview_img = cv2.cvtColor(np.transpose(ds_data, (1, 2, 0)), cv2.COLOR_RGB2BGR)
+             else:
+                 overview_img = cv2.cvtColor(ds_data[0], cv2.COLOR_GRAY2BGR)
+        except Exception as e:
+             print("Falling back to black background due downsample error: ", e)
         
         # Iterate and crop pure structures
         for i, det in enumerate(final_detections):
@@ -169,20 +196,31 @@ def analyze_ortho(args):
                 "BBox_H": global_h,
                 "Center_X": round(det['cx'], 1),
                 "Center_Y": round(det['cy'], 1),
-                "Area_px": det['area'],
+                "Area_px": round(det['area'], 1),
                 "Latitude": lat,
                 "Longitude": lon
             })
             
             # Draw on overview
-            # Scale coordinates
+            
+            # Scale BBOX coordinates for rect drawing
             sx = int(global_x * scale_factor)
             sy = int(global_y * scale_factor)
             sw = int(global_w * scale_factor)
             sh = int(global_h * scale_factor)
             
-            # Since overview is empty black right now, let's just make it a mask overlay for now
-            cv2.rectangle(overview_img, (sx, sy), (sx + sw, sy + sh), (0, 255, 0), 1)
+            # Scale and cast Poly Mask coordinates
+            scaled_poly = (det['polygon'] * scale_factor).astype(np.int32)
+            
+            # Overlay semi-transparent Segmentation Mask Polygon
+            overlay = overview_img.copy()
+            cv2.fillPoly(overlay, [scaled_poly], (0, 100, 255))
+            cv2.addWeighted(overlay, 0.4, overview_img, 0.6, 0, overview_img)
+            
+            # Draw Outline stroke for Poly
+            cv2.polylines(overview_img, [scaled_poly], isClosed=True, color=(0, 255, 0), thickness=1)
+            
+            # Draw Text Header
             cv2.putText(overview_img, panel_id, (sx, max(0, sy-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
         # Build CSV
@@ -208,7 +246,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("image_path", help="Path to input TIFF/GeoTIFF")
     parser.add_argument("output_dir", help="Path to output directory")
-    parser.add_argument("--model_path", default="yolov8-solar.pt", help="Path to ultralytics YOLO model")
+    parser.add_argument("--model_path", default="models/solar_panel_seg.pt", help="Path to custom-trained solar model")
     parser.add_argument("--tile_size", type=int, default=1024, help="Tile size for inference")
     parser.add_argument("--overlap", type=float, default=0.25, help="Overlap ratio between tiles")
     parser.add_argument("--conf_thresh", type=float, default=0.5, help="Confidence threshold")
