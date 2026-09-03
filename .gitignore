@@ -19,3 +19,8 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Heavy assets
+backend/uploads/
+backend/output/
+python-engine/__pycache__/

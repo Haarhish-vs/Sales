@@ -22,6 +22,7 @@ const Navbar = () => {
                     <li><NavLink to="/about">About</NavLink></li>
                     <li><NavLink to="/products">Products</NavLink></li>
                     <li><NavLink to="/contact">Contact</NavLink></li>
+                    <li><NavLink to="/analysis" className="nav-accent">AI Scan 🛰️</NavLink></li>
                 </ul>
                 <div className="navbar-actions">
                     {user ? (
@@ -43,6 +44,7 @@ const Navbar = () => {
                 <NavLink to="/about" onClick={() => setOpen(false)}>About</NavLink>
                 <NavLink to="/products" onClick={() => setOpen(false)}>Products</NavLink>
                 <NavLink to="/contact" onClick={() => setOpen(false)}>Contact</NavLink>
+                <NavLink to="/analysis" onClick={() => setOpen(false)} style={{ color: 'var(--color-primary)', fontWeight: 600 }}>AI Scan 🛰️</NavLink>
                 {user ? (
                     <>
                         <NavLink to="/profile" onClick={() => setOpen(false)}>Profile</NavLink>

@@ -57,11 +57,16 @@ router.post('/upload', upload.single('image'), (req, res) => {
             const pdfName = path.basename(result.pdf_report);
             const imgName = path.basename(result.annotated_image);
 
+            // Construct dynamic host URL to fix HTTPS mixed content issues on Render
+            const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+            const host = req.get('host');
+            const baseUrl = `${protocol}://${host}`;
+
             res.json({
                 message: 'Analysis complete',
                 anomalies_count: result.anomalies_count,
-                pdf_url: `http://localhost:${process.env.PORT || 5000}/output/${pdfName}`,
-                image_url: `http://localhost:${process.env.PORT || 5000}/output/${imgName}`
+                pdf_url: `${baseUrl}/output/${pdfName}`,
+                image_url: `${baseUrl}/output/${imgName}`
             });
         } catch (err) {
             console.error('Failed to parse Python output:', outputData);
