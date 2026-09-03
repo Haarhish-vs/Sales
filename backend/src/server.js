@@ -23,21 +23,7 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-    origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
-        const allowed = [
-            'http://localhost:5173',
-            'http://localhost:5174',
-            'http://localhost:3000',
-            process.env.CLIENT_URL,
-        ].filter(Boolean);
-        if (
-            allowed.includes(origin) ||
-            origin.endsWith('.onrender.com') ||
-            origin.endsWith('.vercel.app')
-        ) return cb(null, true);
-        cb(new Error('Not allowed by CORS'));
-    },
+    origin: true, // Dynamically echo back the requesting origin to bypass all CORS blocks
     credentials: true,
 }));
 app.use(express.json());
