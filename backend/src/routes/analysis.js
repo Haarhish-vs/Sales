@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import supabase from '../config/supabase.js';
+import sharp from 'sharp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,10 +48,36 @@ router.post('/process-local', async (req, res) => {
         return res.status(404).json({ error: 'Assembled file missing on server' });
     }
 
+    let targetProcessPath = localImagePath;
+
+    try {
+        // Detect if file is massive (> 20MB). If so, stream-compress down to JPG using sharp (keeps resolution via VIPS engine without blowing RAM)
+        const stats = fs.statSync(localImagePath);
+        if (stats.size > 20 * 1024 * 1024) {
+            console.log(`Massive file detected (${(stats.size / 1024 / 1024).toFixed(1)} MB). Auto-compressing to bypass Cloud Memory Limits...`);
+            const ext = path.extname(filename);
+            const compressedFilename = `shrunk_${Date.now()}.jpg`;
+            const compressedPath = path.join(uploadsDir, compressedFilename);
+
+            // LimitInputPixels: false allows VIPS to open super-massive drone TIFFs efficiently
+            await sharp(localImagePath, { limitInputPixels: false })
+                .jpeg({ quality: 90 })
+                .toFile(compressedPath);
+
+            console.log(`Compression success. Destroying raw chunk file.`);
+            try { fs.unlinkSync(localImagePath); } catch (e) { }
+
+            targetProcessPath = compressedPath;
+        }
+    } catch (compressErr) {
+        console.error("Auto-compression skipped or failed:", compressErr);
+        // Fallback: If compression fails, attempt raw Python execution
+    }
+
     const pythonScript = path.join(__dirname, '../../../python-engine/analyze.py');
 
-    // Spawn Python Process natively on the Render server over the transient chunk-assembled file
-    const pythonProcess = spawn('python', [pythonScript, localImagePath, outputDir]);
+    // Spawn Python Process natively on the Render server over the safe file
+    const pythonProcess = spawn('python', [pythonScript, targetProcessPath, outputDir]);
 
     let outputData = '';
     let errorData = '';
@@ -61,7 +88,7 @@ router.post('/process-local', async (req, res) => {
     pythonProcess.on('close', async (code) => {
         if (code !== 0) {
             console.error('Python Error:', errorData);
-            try { fs.unlinkSync(localImagePath); } catch (e) { }
+            try { fs.unlinkSync(targetProcessPath); } catch (e) { }
             return res.status(500).json({ error: 'Thermal analysis failed', details: errorData });
         }
 
