@@ -22,6 +22,7 @@ def analyze_image(image_path, output_dir):
     
     anomalies = []
     # 3. Process Contours (Solar Panels / Hotspots)
+    import uuid
     for i, cnt in enumerate(contours):
         # Filter small noise
         if cv2.contourArea(cnt) < 50:
@@ -33,21 +34,41 @@ def analyze_image(image_path, output_dir):
         temp_diff = random.uniform(5.0, 45.0) 
         status = "Hotspot" if temp_diff > 15.0 else "Normal"
         
+        # Determine panel coordinates
+        row = (y // 150) + 1
+        col = (x // 150) + 1
+        lat = 34.0522 + (y * 0.00001)
+        long_val = -118.2437 + (x * 0.00001)
+        
+        # Crop Image
+        crop_img = img[y:y+h, x:x+w]
+        crop_path = os.path.join(output_dir, f"panel_{i}_{uuid.uuid4().hex[:6]}.png")
+        if crop_img.size > 0:
+            cv2.imwrite(crop_path, crop_img)
+            
+        anomalies.append({
+            "id": f"Panel-{i+1}",
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "row": row,
+            "col": col,
+            "lat": round(lat, 5),
+            "long": round(long_val, 5),
+            "temp_difference": round(temp_diff, 1),
+            "status": status,
+            "crop_path": crop_path
+        })
+        
         if status == "Hotspot":
             # Draw red box for anomaly
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
             cv2.putText(img, f"{temp_diff:.1f}C", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            
-            anomalies.append({
-                "id": f"Panel-{i+1}",
-                "x": x,
-                "y": y,
-                "temp_difference": round(temp_diff, 1),
-                "status": status
-            })
         else:
             # Draw green box for normal
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 1)
+
             
     # 4. Save Annotated Image
     annotated_img_path = os.path.join(output_dir, "annotated_result.png")
@@ -62,7 +83,7 @@ def analyze_image(image_path, output_dir):
     c.drawString(50, height - 50, "Solar Farm Thermal Analysis Report")
     
     c.setFont("Helvetica", 12)
-    c.drawString(50, height - 80, f"Total Anomalies Detected: {len(anomalies)}")
+    c.drawString(50, height - 80, f"Total Panels Detected: {len(anomalies)}")
     
     # Draw scaled annotated image on PDF
     try:
@@ -70,14 +91,30 @@ def analyze_image(image_path, output_dir):
     except:
         pass
         
-    c.drawString(50, height - 430, "Anomaly Details:")
+    c.drawString(50, height - 430, "Panel Details:")
     y_pos = height - 460
-    for anomaly in sorted(anomalies, key=lambda a: a['temp_difference'], reverse=True)[:10]: # Top 10
-        c.drawString(50, y_pos, f"{anomaly['id']}: +{anomaly['temp_difference']} °C at (X:{anomaly['x']}, Y:{anomaly['y']})")
-        y_pos -= 20
-        if y_pos < 50:
+    
+    # Show all panels
+    for panel in anomalies:
+        if y_pos < 120:
             c.showPage()
-            y_pos = height - 50
+            y_pos = height - 60
+            
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(50, y_pos, f"{panel['id']} - Temp: +{panel['temp_difference']} °C ({panel['status']})")
+        
+        c.setFont("Helvetica", 10)
+        c.drawString(50, y_pos - 20, f"Location: Row {panel['row']}, Column {panel['col']}")
+        c.drawString(50, y_pos - 35, f"Coordinates: Lat {panel['lat']}, Long {panel['long']}")
+        
+        try:
+            # Draw small crop image alongside text
+            if os.path.exists(panel['crop_path']):
+                c.drawImage(panel['crop_path'], 380, y_pos - 50, width=100, height=60, preserveAspectRatio=True)
+        except Exception:
+            pass
+            
+        y_pos -= 80 # spacing for the next panel entry
             
     c.save()
     
