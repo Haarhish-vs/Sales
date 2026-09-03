@@ -127,9 +127,14 @@ const Analysis = () => {
                             <div style={{ background: '#f8fafc', borderRadius: 16, padding: 32, border: '1px solid var(--color-border)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, borderBottom: '1px solid var(--color-border)', paddingBottom: 20 }}>
                                     <h4 style={{ fontSize: '1.3rem' }}>Analysis Results</h4>
-                                    <a href={result.pdf_url} target="_blank" rel="noreferrer" className="btn btn-primary">
-                                        📥 Download PDF Report
-                                    </a>
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        <a href={result.image_url} target="_blank" download rel="noreferrer" className="btn" style={{ background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1' }}>
+                                            🖼️ Download Map
+                                        </a>
+                                        <a href={result.pdf_url} target="_blank" rel="noreferrer" className="btn btn-primary">
+                                            📥 Download PDF Report
+                                        </a>
+                                    </div>
                                 </div>
 
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 32, alignItems: 'center' }}>
