@@ -129,13 +129,29 @@ router.post('/process-local', async (req, res) => {
                 try { fs.unlinkSync(csvPath); } catch (e) { }
             }, 1000);
 
+            let panelData = [];
+            if (csvBuffer) {
+                const csvString = csvBuffer.toString();
+                const lines = csvString.split('\n').map(l => l.trim()).filter(l => l);
+                if (lines.length > 1) {
+                    const headers = lines[0].split(',');
+                    panelData = lines.slice(1).map(line => {
+                        const values = line.split(',');
+                        let obj = {};
+                        headers.forEach((h, i) => obj[h] = values[i]);
+                        return obj;
+                    });
+                }
+            }
+
             res.json({
                 message: 'Analysis complete and synced to cloud',
                 total_panels: result.total_panels,
                 csv_url: csvUrl,
                 image_url: annotatedUrl,
                 report: dbRecord,
-                models: result.models_used
+                models: result.models_used,
+                panel_data: panelData
             });
         } catch (err) {
             console.error('Failed to process Cloud sync:', err);
