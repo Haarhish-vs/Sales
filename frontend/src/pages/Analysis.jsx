@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://sales-hkhf.onrender.com/api';
+// Automatically route API traffic to local node server if running locally via 'npm run dev'
+const API_BASE = import.meta.env.DEV
+    ? (import.meta.env.VITE_API_URL || 'http://localhost:5000/api')
+    : 'https://sales-hkhf.onrender.com/api';
 
 const Analysis = () => {
     const { user } = useAuth();
