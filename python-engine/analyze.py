@@ -51,8 +51,10 @@ def analyze_ortho(args):
     if os.path.exists(args.model_path):
         model = YOLO(args.model_path)
     else:
-        # STRICT REQUIREMENT: Throw error if custom model missing.
-        raise FileNotFoundError(f"CRITICAL: Production model {args.model_path} not found. Please provide a custom-trained solar model. Fallbacks disabled for production.")
+        # STRICT REQUIREMENT OVERRIDE: User wants to test pipeline without a custom model.
+        # raise FileNotFoundError(f"CRITICAL: Production model {args.model_path} not found. Please provide a custom-trained solar model. Fallbacks disabled for production.")
+        print(f"WARNING: Model {args.model_path} not found. Falling back to yolov8n-seg.pt for testing.")
+        model = YOLO("yolov8n-seg.pt")
         
     print(f"Opening TIFF image {args.image_path}")
     all_detections = []
