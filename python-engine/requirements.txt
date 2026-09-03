@@ -1,7 +1,9 @@
-opencv-python-headless==4.10.0.84
-numpy==2.1.1
-reportlab==4.2.2
+opencv-python-headless
+numpy
 ultralytics
 rasterio
 pandas
-sahi
+streamlit
+pyproj
+shapely
+openpyxl
