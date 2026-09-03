@@ -1,5 +1,4 @@
 import express from 'express';
-import multer from 'multer';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -11,26 +10,51 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
-// Define upload directories
 const uploadsDir = path.join(__dirname, '../../uploads');
 const outputDir = path.join(__dirname, '../../output');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadsDir),
-    filename: (req, file, cb) => cb(null, `thermal_${Date.now()}${path.extname(file.originalname)}`)
+// 1. Generate a signed URL for the frontend to upload massive files securely without proxy limits
+router.get('/upload-url', async (req, res) => {
+    try {
+        const ext = path.extname(req.query.filename || '.tiff');
+        const fileName = `raw_${Date.now()}${ext}`;
+
+        const { data, error } = await supabase.storage.from('reports').createSignedUploadUrl(fileName);
+
+        if (error) throw error;
+        res.json({ url: data.signedUrl, path: fileName });
+    } catch (err) {
+        console.error('Failed to generate upload URL', err);
+        res.status(500).json({ error: 'Failed to generate secure upload url' });
+    }
 });
-const upload = multer({ storage });
 
-router.post('/upload', upload.single('image'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+// 2. Process the file after the frontend has successfully uploaded it to Supabase
+router.post('/process', async (req, res) => {
+    const storagePath = req.body.path;
+    if (!storagePath) return res.status(400).json({ error: 'No storage path provided' });
 
-    const imagePath = req.file.path;
+    const localImagePath = path.join(uploadsDir, storagePath);
+
+    try {
+        // Download the raw image from Supabase to the local disk for OpenCV processing
+        const { data: fileData, error: downloadError } = await supabase.storage.from('reports').download(storagePath);
+        if (downloadError) throw downloadError;
+
+        const buffer = Buffer.from(await fileData.arrayBuffer());
+        fs.writeFileSync(localImagePath, buffer);
+
+    } catch (err) {
+        console.error('Failed to download image from cloud:', err);
+        return res.status(500).json({ error: 'Failed to retrieve uploaded image from cloud storage' });
+    }
+
     const pythonScript = path.join(__dirname, '../../../python-engine/analyze.py');
 
     // Spawn Python Process
-    const pythonProcess = spawn('python', [pythonScript, imagePath, outputDir]);
+    const pythonProcess = spawn('python', [pythonScript, localImagePath, outputDir]);
 
     let outputData = '';
     let errorData = '';
@@ -46,11 +70,11 @@ router.post('/upload', upload.single('image'), (req, res) => {
     pythonProcess.on('close', async (code) => {
         if (code !== 0) {
             console.error('Python Error:', errorData);
+            try { fs.unlinkSync(localImagePath); } catch (e) { }
             return res.status(500).json({ error: 'Thermal analysis failed', details: errorData });
         }
 
         try {
-            // Find the JSON string in the output (ignoring any other prints from modules)
             const jsonStr = outputData.split('\n').filter(l => l.startsWith('{')).pop();
             const result = JSON.parse(jsonStr);
 
@@ -58,14 +82,12 @@ router.post('/upload', upload.single('image'), (req, res) => {
             const imgPath = result.annotated_image;
             const pdfName = path.basename(pdfPath);
             const imgName = path.basename(imgPath);
-            const originalName = path.basename(imagePath);
+            const originalName = path.basename(localImagePath);
 
-            // 1. Read files into memory
-            const originalBuffer = fs.readFileSync(imagePath);
+            const originalBuffer = fs.readFileSync(localImagePath);
             const imgBuffer = fs.readFileSync(imgPath);
             const pdfBuffer = fs.readFileSync(pdfPath);
 
-            // 2. Upload to Supabase Storage (Assumes 'reports' bucket exists and is public)
             const uploadFile = async (name, buffer, mimeType) => {
                 const { data, error } = await supabase.storage.from('reports').upload(name, buffer, { contentType: mimeType, upsert: true });
                 if (error) throw error;
@@ -76,7 +98,6 @@ router.post('/upload', upload.single('image'), (req, res) => {
             const annotatedUrl = await uploadFile(`annotated_${imgName}`, imgBuffer, 'image/png');
             const pdfUrl = await uploadFile(pdfName, pdfBuffer, 'application/pdf');
 
-            // 3. Save to database
             const { data: dbRecord, error: dbError } = await supabase.from('analysis_reports').insert([{
                 anomalies_count: result.anomalies_count,
                 original_image_url: originalUrl,
@@ -86,12 +107,11 @@ router.post('/upload', upload.single('image'), (req, res) => {
 
             if (dbError) throw dbError;
 
-            // 4. Delete local files to free up disk space
             setTimeout(() => {
-                try { fs.unlinkSync(imagePath); } catch (e) { }
+                try { fs.unlinkSync(localImagePath); } catch (e) { }
                 try { fs.unlinkSync(imgPath); } catch (e) { }
                 try { fs.unlinkSync(pdfPath); } catch (e) { }
-            }, 1000); // Small delay to ensure DB handles transaction completely
+            }, 1000);
 
             res.json({
                 message: 'Analysis complete and synced to cloud',
@@ -102,11 +122,13 @@ router.post('/upload', upload.single('image'), (req, res) => {
             });
         } catch (err) {
             console.error('Failed to process and sync Python output:', err);
-            // Attempt cleanup on failure
-            try { fs.unlinkSync(imagePath); } catch (e) { }
+            try { fs.unlinkSync(localImagePath); } catch (e) { }
             res.status(500).json({ error: 'Failed to process and sync results to cloud' });
         }
     });
+
+    // Remove the raw upload file from the bucket (since we re-uploaded it as 'original_xyz') to keep storage clean
+    supabase.storage.from('reports').remove([storagePath]).catch(e => console.error('Failed to cleanup raw upload', e));
 });
 
 export default router;

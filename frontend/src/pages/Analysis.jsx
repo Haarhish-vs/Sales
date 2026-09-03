@@ -19,21 +19,37 @@ const Analysis = () => {
         setLoading(true);
         setError('');
 
-        const formData = new FormData();
-        formData.append('image', file);
-
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`${API_BASE}/analysis/upload`, {
-                method: 'POST',
-                headers: {
-                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-                },
-                body: formData
+            const headers = {
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            };
+
+            // 1. Get Signed URL from Backend
+            const urlRes = await fetch(`${API_BASE}/analysis/upload-url?filename=${encodeURIComponent(file.name)}`, { headers });
+            const urlData = await urlRes.json();
+            if (!urlRes.ok) throw new Error(urlData.error || 'Failed to initialize upload');
+
+            const { url, path } = urlData;
+
+            // 2. Upload massive file DIRECTLY to Supabase Cloud, bypassing Render's size limits
+            const uploadRes = await fetch(url, {
+                method: 'PUT',
+                body: file
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Failed to analyze image');
-            setResult(data);
+            if (!uploadRes.ok) throw new Error('Failed to upload the large image directly to Cloud Storage. Please check file formatting or network.');
+
+            // 3. Instruct backend to commence AI sequence
+            const procRes = await fetch(`${API_BASE}/analysis/process`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: path })
+            });
+
+            const resultData = await procRes.json();
+            if (!procRes.ok) throw new Error(resultData.error || 'Data process failed');
+
+            setResult(resultData);
         } catch (err) {
             setError(err.message);
         } finally {
