@@ -11,6 +11,7 @@ import Products from './pages/Products';
 import Orders from './pages/Orders';
 import Messages from './pages/Messages';
 import Settings from './pages/Settings';
+import Analysis from './pages/Analysis';
 
 const ProtectedRoute = ({ children }) => {
     const { admin } = useAuth();
@@ -28,6 +29,7 @@ function App() {
             <Route path="/orders" element={<ProtectedRoute><Layout title="Orders"><Orders /></Layout></ProtectedRoute>} />
             <Route path="/messages" element={<ProtectedRoute><Layout title="Messages"><Messages /></Layout></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Layout title="Site Settings"><Settings /></Layout></ProtectedRoute>} />
+            <Route path="/analysis" element={<ProtectedRoute><Layout title="Thermal Analysis"><Analysis /></Layout></ProtectedRoute>} />
         </Routes>
     );
 }
