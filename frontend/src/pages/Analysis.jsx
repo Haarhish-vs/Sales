@@ -7,6 +7,7 @@ const Analysis = () => {
     const { user } = useAuth();
     const [file, setFile] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [progress, setProgress] = useState(0);
     const [result, setResult] = useState(null);
     const [error, setError] = useState('');
 
@@ -18,6 +19,7 @@ const Analysis = () => {
 
         setLoading(true);
         setError('');
+        setProgress(0);
 
         try {
             const token = localStorage.getItem('token');
@@ -25,35 +27,54 @@ const Analysis = () => {
                 ...(token ? { 'Authorization': `Bearer ${token}` } : {})
             };
 
-            // 1. Get Signed URL from Backend
-            const urlRes = await fetch(`${API_BASE}/analysis/upload-url?filename=${encodeURIComponent(file.name)}`, { headers });
-            const urlData = await urlRes.json();
-            if (!urlRes.ok) throw new Error(urlData.error || 'Failed to initialize upload');
+            const CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB size safely glides past ANY cloud payload filters (Render, Cloudflare, etc)
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            const fileId = `upload_${Date.now()}`;
+            const originalName = file.name;
+            const ext = originalName.split('.').pop();
+            const finalFilename = `${fileId}.${ext}`;
 
-            const { url, path } = urlData;
+            // 1. Slice and transmit chunks dynamically
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, file.size);
+                const chunk = file.slice(start, end);
 
-            // 2. Upload massive file DIRECTLY to Supabase Cloud, bypassing Render's size limits
-            const uploadRes = await fetch(url, {
-                method: 'PUT',
-                body: file
-            });
-            if (!uploadRes.ok) throw new Error('Failed to upload the large image directly to Cloud Storage. Please check file formatting or network.');
+                const formData = new FormData();
+                formData.append('chunk', chunk, 'chunk');
+                formData.append('fileId', fileId);
+                formData.append('chunkIndex', i);
+                formData.append('totalChunks', totalChunks);
+                formData.append('originalName', originalName);
 
-            // 3. Instruct backend to commence AI sequence
-            const procRes = await fetch(`${API_BASE}/analysis/process`, {
+                const chunkRes = await fetch(`${API_BASE}/analysis/upload-chunk`, {
+                    method: 'POST',
+                    headers,
+                    body: formData
+                });
+                if (!chunkRes.ok) throw new Error(`Network disconnected uploading sequence ${i + 1}/${totalChunks}`);
+
+                setProgress(Math.round(((i + 1) / totalChunks) * 100));
+            }
+
+            // 2. Trigger Assembly and Processing
+            setProgress(100); // Upload done, processing starts
+
+            const procRes = await fetch(`${API_BASE}/analysis/process-local`, {
                 method: 'POST',
                 headers: { ...headers, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: path })
+                body: JSON.stringify({ filename: finalFilename })
             });
 
             const resultData = await procRes.json();
-            if (!procRes.ok) throw new Error(resultData.error || 'Data process failed');
+            if (!procRes.ok) throw new Error(resultData.error || 'Data process failed on the engine');
 
             setResult(resultData);
         } catch (err) {
             setError(err.message);
         } finally {
             setLoading(false);
+            setProgress(0);
         }
     };
 
@@ -63,7 +84,7 @@ const Analysis = () => {
                 <div className="container" style={{ textAlign: 'center' }}>
                     <span className="badge badge-primary" style={{ marginBottom: 16 }}>COMPUTER VISION AI</span>
                     <h1 style={{ fontSize: '2.5rem', marginBottom: 12 }}>Thermal Panel <span className="gradient-text">Scan</span></h1>
-                    <p style={{ maxWidth: 600, margin: '0 auto' }}>Upload your drone thermal maps (.tiff, .png, .jpg) to instantly detect solar panel anomalies and download detailed reports.</p>
+                    <p style={{ maxWidth: 600, margin: '0 auto' }}>Upload your massive drone thermal orthomosaics securely. Our dual-chunk pipeline bypasses all upload limits automatically.</p>
                 </div>
             </div>
 
@@ -80,21 +101,25 @@ const Analysis = () => {
 
                         <form onSubmit={handleUpload} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 32 }}>
                             <div className="form-group" style={{ flex: 1 }}>
-                                <label className="form-label" style={{ fontWeight: 600, color: 'var(--color-text)' }}>Select Thermal Image</label>
+                                <label className="form-label" style={{ fontWeight: 600, color: 'var(--color-text)' }}>Select High Res Map (Any Size)</label>
                                 <div style={{ border: '2px dashed var(--color-border)', borderRadius: 12, padding: 20, textAlign: 'center', background: 'var(--color-surface-hover)' }}>
                                     <input type="file" accept="image/*" onChange={handleFileChange} style={{ width: '100%' }} />
                                 </div>
                             </div>
                             <button type="submit" className="btn btn-primary" style={{ padding: '16px 24px' }} disabled={!file || loading}>
-                                {loading ? 'Scanning...' : 'Start Scan 🚀'}
+                                {loading && progress < 100 ? `Transmitting ${progress}%` : loading && progress === 100 ? 'Scanning...' : 'Start Scan 🚀'}
                             </button>
                         </form>
 
                         {loading && (
                             <div style={{ textAlign: 'center', padding: 40 }}>
                                 <div style={{ width: 40, height: 40, border: '3px solid var(--color-border)', borderTopColor: 'var(--color-primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }}></div>
-                                <h4 style={{ marginBottom: 8 }}>Analyzing Array Integrity...</h4>
-                                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>Segmenting panels, measuring thermal differentials, building structural PDF...</p>
+                                <h4 style={{ marginBottom: 8 }}>
+                                    {progress < 100 ? `Streaming massive file to AI Engine... (${progress}%)` : `Analyzing Array Integrity...`}
+                                </h4>
+                                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
+                                    {progress < 100 ? `Bypassing proxy load balancers seamlessly.` : `Segmenting panels, rendering heatmaps, computing differentials...`}
+                                </p>
                             </div>
                         )}
 
@@ -114,7 +139,7 @@ const Analysis = () => {
                                             {result.anomalies_count}
                                         </div>
                                         <p style={{ color: 'var(--color-text-muted)', marginTop: 12, fontSize: '0.9rem', lineHeight: 1.5 }}>
-                                            Severe high-temperature differentials detected. Review the PDF report for exact coordinates and maintenance instructions.
+                                            High-temperature differentials detected. Review the PDF report for exact coordinates and maintenance instructions.
                                         </p>
                                     </div>
                                     <div style={{ borderRadius: 12, overflow: 'hidden', border: '4px solid #fff', boxShadow: '0 10px 30px rgba(0,0,0,0.08)' }}>
