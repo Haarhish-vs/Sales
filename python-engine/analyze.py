@@ -16,23 +16,35 @@ def analyze_image(image_path, output_dir):
         
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
-    # 2. Simulated Thermal thresholding (finding bright spots)
-    _, thresh = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 2. Simulated Structural Panel segmentation (finding ALL panels)
+    # Using adaptive threshold to find structural boundaries across different lightings
+    blurred = cv2.GaussianBlur(img_gray, (7, 7), 0)
+    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3)
+    
+    # Dilate to close panel borders
+    kernel = np.ones((5,5), np.uint8)
+    dilated = cv2.dilate(thresh, kernel, iterations=1)
+    
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     anomalies = []
     # 3. Process Contours (Solar Panels / Hotspots)
     import uuid
     for i, cnt in enumerate(contours):
         # Filter small noise
-        if cv2.contourArea(cnt) < 50:
+        if cv2.contourArea(cnt) < 150: # Increased minimum area to filter noise
             continue
             
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # Simulated temperature anomaly
-        temp_diff = random.uniform(5.0, 45.0) 
-        status = "Hotspot" if temp_diff > 15.0 else "Normal"
+        # Determine mean pixel brightness inside the panel boundary
+        mask = np.zeros(img_gray.shape, np.uint8)
+        cv2.drawContours(mask, [cnt], 0, 255, -1)
+        mean_intensity = cv2.mean(img_gray, mask=mask)[0]
+        
+        # Calculate dynamic temperature based on raw pixel brightness + slight variation
+        temp_diff = (mean_intensity / 255.0) * 45.0 + random.uniform(0, 5) 
+        status = "Hotspot" if temp_diff > 25.0 else "Normal"
         
         # Determine panel coordinates
         row = (y // 150) + 1
