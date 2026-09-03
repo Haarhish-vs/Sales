@@ -51,10 +51,14 @@ def analyze_ortho(args):
     if os.path.exists(args.model_path):
         model = YOLO(args.model_path)
     else:
-        # STRICT REQUIREMENT OVERRIDE: User wants to test pipeline without a custom model.
-        # raise FileNotFoundError(f"CRITICAL: Production model {args.model_path} not found. Please provide a custom-trained solar model. Fallbacks disabled for production.")
-        print(f"WARNING: Model {args.model_path} not found. Falling back to yolov8n-seg.pt for testing.")
-        model = YOLO("yolov8n-seg.pt")
+        print(f"WARNING: Local model {args.model_path} not found.")
+        print(f"Auto-downloading open-source Solar Panel Segmentation model from HuggingFace...")
+        # Ultralytics natively supports loading from HuggingFace Hub!
+        try:
+            model = YOLO("finloop/yolov8s-seg-solar-panels")
+        except Exception as e:
+            print("Failed to pull HuggingFace model, falling back to yolov8n-seg.pt. Error:", e)
+            model = YOLO("yolov8n-seg.pt")
         
     print(f"Opening TIFF image {args.image_path}")
     all_detections = []
