@@ -83,11 +83,20 @@ router.post('/process-local', async (req, res) => {
     pythonProcess.stdout.on('data', (data) => outputData += data.toString());
     pythonProcess.stderr.on('data', (data) => errorData += data.toString());
 
-    pythonProcess.on('close', async (code) => {
-        if (code !== 0) {
-            console.error('Python Error:', errorData);
+    pythonProcess.on('close', async (code, signal) => {
+        console.log(`[SYS] Python process terminated. Exit Code: ${code} | OS Signal: ${signal}`);
+        console.log(`[SYS] Python STDOUT Log length: ${outputData.length} chars`);
+        if (errorData) {
+            console.log(`[SYS] Python STDERR (Warnings/Errors):`, errorData);
+        }
+
+        if (code !== 0 || signal) {
+            console.error(`[FATAL] Analysis failed! Code: ${code}, Signal: ${signal}`);
+            if (signal === 'SIGKILL' || code === 137) {
+                console.error(`[CRITICAL] Your Render Server ran out of RAM! PyTorch needs >1GB to load. Free tier is 512MB limit!`);
+            }
             try { fs.unlinkSync(targetProcessPath); } catch (e) { }
-            return res.status(500).json({ error: 'Thermal analysis failed', details: errorData });
+            return res.status(500).json({ error: 'Thermal analysis Engine Crashed', details: errorData, signal: signal });
         }
 
         try {
