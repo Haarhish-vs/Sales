@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS contact_messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Site settings table (managed by admin, shown on contact page)
+CREATE TABLE IF NOT EXISTS site_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  address TEXT DEFAULT '',
+  hours TEXT DEFAULT '',
+  map_url TEXT DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- ===========================================================
 -- Row Level Security (OPTIONAL - if using Supabase Auth RLS)
 -- The current setup uses custom JWT via Node.js backend, so

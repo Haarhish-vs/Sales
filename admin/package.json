@@ -1,0 +1,15 @@
+{
+    "name": "admin",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite --port 5174",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "react-router-dom": "^7.18.3",
+        "recharts": "^3.10.1"
+    }
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as api from '../services/api';
 
 const Contact = () => {
@@ -7,6 +7,11 @@ const Contact = () => {
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState('');
     const [formError, setFormError] = useState('');
+    const [settings, setSettings] = useState(null);
+
+    useEffect(() => {
+        api.getSiteSettings().then(setSettings);
+    }, []);
 
     const validate = () => {
         const e = {};
@@ -58,10 +63,10 @@ const Contact = () => {
                             </p>
                             <div className="contact-info-items">
                                 {[
-                                    { icon: '📧', title: 'Email', info: 'hello@nexusapp.com' },
-                                    { icon: '📞', title: 'Phone', info: '+1 (555) 123-4567' },
-                                    { icon: '📍', title: 'Location', info: '123 Tech Street, San Francisco, CA 94105' },
-                                    { icon: '🕐', title: 'Hours', info: 'Mon – Fri, 9am – 6pm PST' },
+                                    { icon: '📧', title: 'Email', info: settings?.email || 'support@nexusapp.com' },
+                                    { icon: '📞', title: 'Phone', info: settings?.phone || '+1 (555) 123-4567' },
+                                    { icon: '📍', title: 'Location', info: settings?.address || '123 Tech Street, San Francisco, CA 94105' },
+                                    { icon: '🕐', title: 'Hours', info: settings?.hours || 'Mon – Fri, 9am – 6pm PST' },
                                 ].map(item => (
                                     <div key={item.title} className="contact-info-item">
                                         <div className="contact-info-icon">{item.icon}</div>

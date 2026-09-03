@@ -7,6 +7,7 @@ import userRoutes from './routes/users.js';
 import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
 import contactRoutes from './routes/contact.js';
+import adminRoutes from './routes/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -40,6 +41,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'OK', timestamp: new Date() }));
