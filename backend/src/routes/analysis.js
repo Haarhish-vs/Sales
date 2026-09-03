@@ -51,24 +51,22 @@ router.post('/process-local', async (req, res) => {
     let targetProcessPath = localImagePath;
 
     try {
-        // Detect if file is massive (> 20MB). If so, stream-compress down to JPG using sharp (keeps resolution via VIPS engine without blowing RAM)
-        const stats = fs.statSync(localImagePath);
-        if (stats.size > 20 * 1024 * 1024) {
-            console.log(`Massive file detected (${(stats.size / 1024 / 1024).toFixed(1)} MB). Auto-compressing to bypass Cloud Memory Limits...`);
-            const ext = path.extname(filename);
-            const compressedFilename = `shrunk_${Date.now()}.jpg`;
-            const compressedPath = path.join(uploadsDir, compressedFilename);
+        // UNCONDITIONAL NORMALIZATION: All uploaded images must be clamped to safe dimensions.
+        // A heavily compressed 7MB .tiff with a 20k x 20k resolution will decompress into 1.2GB of RAW RAM inside OpenCV.
+        // By using libvips (sharp) to stream-resize it safely to a maximum 3Kx3K matrix (27MB RAM), we guarantee OpenCV won't trigger OS OOM Killers.
+        const ext = path.extname(filename);
+        const normalizedFilename = `clamped_${Date.now()}.jpg`;
+        const normalizedPath = path.join(uploadsDir, normalizedFilename);
 
-            // LimitInputPixels: false allows VIPS to open super-massive drone TIFFs efficiently
-            await sharp(localImagePath, { limitInputPixels: false })
-                .jpeg({ quality: 90 })
-                .toFile(compressedPath);
+        await sharp(localImagePath, { limitInputPixels: false })
+            .resize(3000, 3000, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 85 })
+            .toFile(normalizedPath);
 
-            console.log(`Compression success. Destroying raw chunk file.`);
-            try { fs.unlinkSync(localImagePath); } catch (e) { }
+        console.log(`Matrix normalized successfully for OpenCV safety. Destroying raw chunk file.`);
+        try { fs.unlinkSync(localImagePath); } catch (e) { }
 
-            targetProcessPath = compressedPath;
-        }
+        targetProcessPath = normalizedPath;
     } catch (compressErr) {
         console.error("Auto-compression skipped or failed:", compressErr);
         // Fallback: If compression fails, attempt raw Python execution
