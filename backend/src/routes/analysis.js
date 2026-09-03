@@ -94,31 +94,30 @@ router.post('/process-local', async (req, res) => {
             const jsonStr = outputData.split('\n').filter(l => l.startsWith('{')).pop();
             const result = JSON.parse(jsonStr);
 
-            const pdfPath = result.pdf_report;
-            const imgPath = result.annotated_image;
-            const pdfName = path.basename(pdfPath);
+            const csvPath = result.csv_report;
+            const imgPath = path.join(outputDir, "annotated_overview.jpg");
+            const csvName = path.basename(csvPath);
             const imgName = path.basename(imgPath);
             const originalName = path.basename(localImagePath);
 
-            // Read the generated analytical PDFs and PNGs (these are very small and fit well within Supabase 50MB free limits!)
-            const imgBuffer = fs.readFileSync(imgPath);
-            const pdfBuffer = fs.readFileSync(pdfPath);
+            const imgBuffer = fs.existsSync(imgPath) ? fs.readFileSync(imgPath) : null;
+            const csvBuffer = fs.existsSync(csvPath) ? fs.readFileSync(csvPath) : null;
 
             const uploadFile = async (name, buffer, mimeType) => {
+                if (!buffer) return null;
                 const { data, error } = await supabase.storage.from('reports').upload(name, buffer, { contentType: mimeType, upsert: true });
                 if (error) throw error;
                 return supabase.storage.from('reports').getPublicUrl(name).data.publicUrl;
             };
 
-            // Notice we do NOT upload the 100MB original file to Supabase anymore to bypass their limit!
-            const annotatedUrl = await uploadFile(`annotated_${imgName}`, imgBuffer, 'image/png');
-            const pdfUrl = await uploadFile(pdfName, pdfBuffer, 'application/pdf');
+            const annotatedUrl = await uploadFile(`annotated_${imgName}`, imgBuffer, 'image/jpeg');
+            const csvUrl = await uploadFile(csvName, csvBuffer, 'text/csv');
 
             const { data: dbRecord, error: dbError } = await supabase.from('analysis_reports').insert([{
-                anomalies_count: result.anomalies_count,
+                anomalies_count: result.total_panels,
                 original_image_url: 'local_disposable_file',
                 annotated_image_url: annotatedUrl,
-                pdf_report_url: pdfUrl,
+                pdf_report_url: csvUrl, // repurposing field for CSV URL temporarily
             }]).select().single();
 
             if (dbError) throw dbError;
@@ -127,15 +126,16 @@ router.post('/process-local', async (req, res) => {
             setTimeout(() => {
                 try { fs.unlinkSync(localImagePath); } catch (e) { }
                 try { fs.unlinkSync(imgPath); } catch (e) { }
-                try { fs.unlinkSync(pdfPath); } catch (e) { }
+                try { fs.unlinkSync(csvPath); } catch (e) { }
             }, 1000);
 
             res.json({
                 message: 'Analysis complete and synced to cloud',
-                anomalies_count: result.anomalies_count,
-                pdf_url: pdfUrl,
+                total_panels: result.total_panels,
+                csv_url: csvUrl,
                 image_url: annotatedUrl,
-                report: dbRecord
+                report: dbRecord,
+                models: result.models_used
             });
         } catch (err) {
             console.error('Failed to process Cloud sync:', err);

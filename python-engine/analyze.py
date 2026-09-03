@@ -1,150 +1,218 @@
 import sys
-import cv2
-import numpy as np
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-import json
 import os
-import random
+import argparse
+import rasterio
+from rasterio.windows import Window
+import pandas as pd
+import numpy as np
+import cv2
+from ultralytics import YOLO
+import json
 
-def analyze_image(image_path, output_dir):
-    # 1. Load Image
-    img = cv2.imread(image_path)
-    if img is None:
-        print(json.dumps({"error": "Failed to load image"}))
-        sys.exit(1)
-        
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+def calculate_iou(box1, box2):
+    x1, y1, w1, h1 = box1
+    x2, y2, w2, h2 = box2
     
-    # 2. Simulated Structural Panel segmentation (finding ALL panels)
-    # Using adaptive threshold to find structural boundaries across different lightings
-    blurred = cv2.GaussianBlur(img_gray, (7, 7), 0)
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3)
+    xi1 = max(x1, x2)
+    yi1 = max(y1, y2)
+    xi2 = min(x1+w1, x2+w2)
+    yi2 = min(y1+h1, y2+h2)
     
-    # Dilate to close panel borders
-    kernel = np.ones((5,5), np.uint8)
-    dilated = cv2.dilate(thresh, kernel, iterations=1)
+    inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
     
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    box1_area = w1 * h1
+    box2_area = w2 * h2
+    union_area = box1_area + box2_area - inter_area
     
-    anomalies = []
-    # 3. Process Contours (Solar Panels / Hotspots)
-    import uuid
-    for i, cnt in enumerate(contours):
-        # Filter small noise
-        if cv2.contourArea(cnt) < 150: # Increased minimum area to filter noise
-            continue
-            
-        x, y, w, h = cv2.boundingRect(cnt)
-        
-        # Determine mean pixel brightness inside the panel boundary
-        mask = np.zeros(img_gray.shape, np.uint8)
-        cv2.drawContours(mask, [cnt], 0, 255, -1)
-        mean_intensity = cv2.mean(img_gray, mask=mask)[0]
-        
-        # Calculate dynamic temperature based on raw pixel brightness + slight variation
-        temp_diff = (mean_intensity / 255.0) * 45.0 + random.uniform(0, 5) 
-        status = "Hotspot" if temp_diff > 25.0 else "Normal"
-        
-        # Determine panel coordinates
-        row = (y // 150) + 1
-        col = (x // 150) + 1
-        lat = 34.0522 + (y * 0.00001)
-        long_val = -118.2437 + (x * 0.00001)
-        
-        # Crop Image
-        crop_img = img[y:y+h, x:x+w]
-        crop_path = os.path.join(output_dir, f"panel_{i}_{uuid.uuid4().hex[:6]}.png")
-        if crop_img.size > 0:
-            cv2.imwrite(crop_path, crop_img)
-            
-        anomalies.append({
-            "id": f"Panel-{i+1}",
-            "x": x,
-            "y": y,
-            "w": w,
-            "h": h,
-            "row": row,
-            "col": col,
-            "lat": round(lat, 5),
-            "long": round(long_val, 5),
-            "temp_difference": round(temp_diff, 1),
-            "status": status,
-            "crop_path": crop_path
-        })
-        
-        if status == "Hotspot":
-            # Draw red box for anomaly
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 2)
-            cv2.putText(img, f"{temp_diff:.1f}C", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        else:
-            # Draw green box for normal
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 1)
+    if union_area == 0:
+        return 0
+    return inter_area / union_area
 
-            
-    # 4. Save Annotated Image
-    annotated_img_path = os.path.join(output_dir, "annotated_result.png")
-    cv2.imwrite(annotated_img_path, img)
+def global_nms(detections, iou_thresh):
+    # Sort detections by confidence
+    detections = sorted(detections, key=lambda x: x['conf'], reverse=True)
+    keep = []
     
-    # 5. Generate PDF Report
-    pdf_path = os.path.join(output_dir, "thermal_report.pdf")
-    c = canvas.Canvas(pdf_path, pagesize=letter)
-    width, height = letter
+    for det in detections:
+        discard = False
+        for k in keep:
+            iou = calculate_iou(det['bbox'], k['bbox'])
+            if iou > iou_thresh:
+                discard = True
+                break
+        if not discard:
+            keep.append(det)
+    return keep
+
+def analyze_ortho(args):
+    os.makedirs(args.output_dir, exist_ok=True)
     
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, height - 50, "Solar Farm Thermal Analysis Report")
-    
-    c.setFont("Helvetica", 12)
-    c.drawString(50, height - 80, f"Total Panels Detected: {len(anomalies)}")
-    
-    # Draw scaled annotated image on PDF
-    try:
-        c.drawImage(annotated_img_path, 50, height - 400, width=500, preserveAspectRatio=True)
-    except:
-        pass
+    print(f"Loading YOLO model from {args.model_path}")
+    if os.path.exists(args.model_path):
+        model = YOLO(args.model_path)
+    else:
+        # Fallback to pretrained for pure execution test if custom not found yet
+        print(f"WARNING: Model {args.model_path} not found. Falling back to yolov8n-seg.pt")
+        model = YOLO("yolov8n-seg.pt")
         
-    c.drawString(50, height - 430, "Panel Details:")
-    y_pos = height - 460
+    print(f"Opening TIFF image {args.image_path}")
+    all_detections = []
     
-    # Show all panels
-    for panel in anomalies:
-        if y_pos < 120:
-            c.showPage()
-            y_pos = height - 60
-            
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(50, y_pos, f"{panel['id']} - Temp: +{panel['temp_difference']} °C ({panel['status']})")
+    with rasterio.open(args.image_path) as src:
+        width = src.width
+        height = src.height
+        transform = src.transform
+        has_geo = src.crs is not None
         
-        c.setFont("Helvetica", 10)
-        c.drawString(50, y_pos - 20, f"Location: Row {panel['row']}, Column {panel['col']}")
-        c.drawString(50, y_pos - 35, f"Coordinates: Lat {panel['lat']}, Long {panel['long']}")
+        step = int(args.tile_size * (1 - args.overlap))
         
-        try:
-            # Draw small crop image alongside text
-            if os.path.exists(panel['crop_path']):
-                c.drawImage(panel['crop_path'], 380, y_pos - 50, width=100, height=60, preserveAspectRatio=True)
-        except Exception:
-            pass
+        print(f"Image Size: {width}x{height}. Starting tiled inference...")
+        
+        for y in range(0, height, step):
+            for x in range(0, width, step):
+                # Clamp window to boundaries
+                w = min(args.tile_size, width - x)
+                h = min(args.tile_size, height - y)
+                window = Window(x, y, w, h)
+                
+                # Read RGB bands (assume first 3 bands)
+                try:
+                    num_bands = min(3, src.count)
+                    tile = src.read([1, 2, 3][:num_bands], window=window)
+                    # Transpose to HWC
+                    tile = np.transpose(tile, (1, 2, 0))
+                except Exception as e:
+                    print(f"Error reading tile at {x}, {y}: {e}")
+                    continue
+                
+                # Convert to BGR for ultralytics/cv2 if it has 3 channels
+                if tile.shape[-1] == 3:
+                     tile_bgr = cv2.cvtColor(tile, cv2.COLOR_RGB2BGR)
+                else:
+                     tile_bgr = tile
+                     
+                if tile_bgr.size == 0 or np.all(tile_bgr == 0):
+                    continue
+                    
+                # Run YOLO Inference (Segment)
+                results = model(tile_bgr, conf=args.conf_thresh, verbose=False)
+                
+                for r in results:
+                    if r.masks is not None:
+                        boxes = r.boxes.xyxy.cpu().numpy()
+                        confs = r.boxes.conf.cpu().numpy()
+                        cls = r.boxes.cls.cpu().numpy()
+                        
+                        # Process each mask (as polygon coordinates)
+                        # We use boxes for the baseline
+                        for i, box in enumerate(boxes):
+                            x1, y1, x2, y2 = box
+                            local_w = x2 - x1
+                            local_h = y2 - y1
+                            
+                            # Transform to global coordinates
+                            global_x = int(x + x1)
+                            global_y = int(y + y1)
+                            global_w = int(local_w)
+                            global_h = int(local_h)
+                            
+                            det = {
+                                "bbox": (global_x, global_y, global_w, global_h),
+                                "conf": float(confs[i]),
+                                "cx": global_x + global_w / 2,
+                                "cy": global_y + global_h / 2,
+                                "area": global_w * global_h, # BBox area
+                            }
+                            all_detections.append(det)
+
+        print(f"Total raw detections: {len(all_detections)}. Applying NMS...")
+        final_detections = global_nms(all_detections, args.iou_thresh)
+        print(f"Valid panels after NMS: {len(final_detections)}")
+        
+        results_data = []
+        
+        # We need a downsampled version of the image to draw annotated overview without OOM
+        scale_factor = 4000 / max(width, height) # Fit in 4000px
+        scale_factor = min(1.0, scale_factor)
+        overview_w = int(width * scale_factor)
+        overview_h = int(height * scale_factor)
+        overview_img = np.zeros((overview_h, overview_w, 3), dtype=np.uint8)
+        
+        # Iterate and crop pure structures
+        for i, det in enumerate(final_detections):
+            panel_id = f"P{str(i+1).zfill(3)}"
+            global_x, global_y, global_w, global_h = det['bbox']
             
-        y_pos -= 80 # spacing for the next panel entry
+            # Crop Full Res
+            crop_window = Window(global_x, global_y, global_w, global_h)
+            try:
+                crop = src.read([1,2,3][:src.count], window=crop_window)
+                if crop.shape[0] == 3:
+                     # Transpose to (H, W, C)
+                     crop_transposed = np.transpose(crop, (1, 2, 0))
+                     # We use cv2 to write a TIF directly, preserving the panel resolution
+                     cv2.imwrite(os.path.join(args.output_dir, f"{panel_id}.tif"), cv2.cvtColor(crop_transposed, cv2.COLOR_RGB2BGR))
+            except Exception as e:
+                print(f"Error cropping {panel_id}: {e}")
+                
+            # GeoCoordinates
+            lat, lon = None, None
+            if has_geo:
+                lon, lat = transform * (det['cx'], det['cy'])
+                
+            results_data.append({
+                "Panel_ID": panel_id,
+                "Confidence": round(det['conf'], 3),
+                "BBox_X": global_x,
+                "BBox_Y": global_y,
+                "BBox_W": global_w,
+                "BBox_H": global_h,
+                "Center_X": round(det['cx'], 1),
+                "Center_Y": round(det['cy'], 1),
+                "Area_px": det['area'],
+                "Latitude": lat,
+                "Longitude": lon
+            })
             
-    c.save()
-    
-    # Return JSON to Node.js
-    result = {
-        "anomalies_count": len(anomalies),
-        "anomalies": anomalies,
-        "annotated_image": annotated_img_path,
-        "pdf_report": pdf_path
-    }
-    
-    print(json.dumps(result))
+            # Draw on overview
+            # Scale coordinates
+            sx = int(global_x * scale_factor)
+            sy = int(global_y * scale_factor)
+            sw = int(global_w * scale_factor)
+            sh = int(global_h * scale_factor)
+            
+            # Since overview is empty black right now, let's just make it a mask overlay for now
+            cv2.rectangle(overview_img, (sx, sy), (sx + sw, sy + sh), (0, 255, 0), 1)
+            cv2.putText(overview_img, panel_id, (sx, max(0, sy-5)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
+        # Build CSV
+        df = pd.DataFrame(results_data)
+        csv_path = os.path.join(args.output_dir, "results.csv")
+        df.to_csv(csv_path, index=False)
+        
+        cv2.imwrite(os.path.join(args.output_dir, "annotated_overview.jpg"), overview_img)
+        
+        # Save JSON metadata (matching API expectations conceptually)
+        meta = {
+            "total_panels": len(final_detections),
+            "csv_report": csv_path,
+            "models_used": args.model_path 
+        }
+        with open(os.path.join(args.output_dir, "metadata.json"), "w") as f:
+            json.dump(meta, f)
+            
+        print(f"Processing Complete! Exported to {args.output_dir}")
+        print(json.dumps(meta)) # Required for API stdout catching
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Missing arguments. Usage: analyze.py <image_path> <output_dir>"}))
-        sys.exit(1)
-        
-    image_path = sys.argv[1]
-    output_dir = sys.argv[2]
-    analyze_image(image_path, output_dir)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("image_path", help="Path to input TIFF/GeoTIFF")
+    parser.add_argument("output_dir", help="Path to output directory")
+    parser.add_argument("--model_path", default="yolov8-solar.pt", help="Path to ultralytics YOLO model")
+    parser.add_argument("--tile_size", type=int, default=1024, help="Tile size for inference")
+    parser.add_argument("--overlap", type=float, default=0.25, help="Overlap ratio between tiles")
+    parser.add_argument("--conf_thresh", type=float, default=0.5, help="Confidence threshold")
+    parser.add_argument("--iou_thresh", type=float, default=0.5, help="IOU threshold for global NMS")
+    
+    args = parser.parse_args()
+    analyze_ortho(args)
