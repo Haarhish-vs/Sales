@@ -64,6 +64,17 @@ CREATE TABLE IF NOT EXISTS site_settings (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Analysis Reports (AI Computer Vision)
+CREATE TABLE IF NOT EXISTS analysis_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    anomalies_count INTEGER DEFAULT 0,
+    original_image_url TEXT NOT NULL,
+    annotated_image_url TEXT NOT NULL,
+    pdf_report_url TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- ===========================================================
 -- Row Level Security (OPTIONAL - if using Supabase Auth RLS)
 -- The current setup uses custom JWT via Node.js backend, so
